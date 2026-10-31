@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#09090f" />
+  <title>TGIF Vol. 7 — QR Scanner</title>
+
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #09090f;
+      --card: #14141d;
+      --muted: #a6a6b2;
+      --text: #ffffff;
+      --accent: #7c6cff;
+      --success: #21d39a;
+      --danger: #ff5d73;
+      --border: #30303b;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      min-height: 100dvh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    .app {
+      width: min(100%, 560px);
+      margin: 0 auto;
+      padding: 28px 18px calc(28px + env(safe-area-inset-bottom));
+    }
+
+    .eyebrow {
+      text-align: center;
+      color: #a99fff;
+      letter-spacing: 3px;
+      font-size: 11px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      text-align: center;
+      margin: 0;
+      font-size: 30px;
+    }
+
+    .subtitle {
+      margin: 9px auto 24px;
+      max-width: 420px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .scanner-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 14px;
+      overflow: hidden;
+    }
+
+    #reader {
+      width: 100%;
+      overflow: hidden;
+      border-radius: 14px;
+      background: #050507;
+    }
+
+    #reader video {
+      border-radius: 14px;
+      object-fit: cover;
+    }
+
+    #reader__scan_region {
+      background: #050507 !important;
+    }
+
+    #reader__dashboard {
+      display: none !important;
+    }
+
+    .status {
+      margin-top: 14px;
+      border-radius: 14px;
+      border: 1px solid var(--border);
+      background: #111118;
+      padding: 14px;
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--muted);
+    }
+
+    .status.success {
+      color: #dffdf4;
+      border-color: rgba(33, 211, 154, .6);
+      background: rgba(33, 211, 154, .09);
+    }
+
+    .status.error {
+      color: #ffe3e8;
+      border-color: rgba(255, 93, 115, .6);
+      background: rgba(255, 93, 115, .09);
+    }
+
+    .actions {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    #startBtn {
+      background: var(--accent);
+      color: #fff;
+    }
+
+    #closeBtn {
+      background: #282832;
+      color: #fff;
+    }
+
+    button:disabled {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+
+    .hint {
+      margin-top: 14px;
+      color: #777783;
+      text-align: center;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="eyebrow">TGIF VOLUME 7</div>
+    <h1>Back To 2016</h1>
+    <div class="subtitle">Arahkan kamera ke QR peserta. Setelah terbaca, hasil akan dikirim kembali ke aplikasi registrasi.</div>
+
+    <section class="scanner-card">
+      <div id="reader"></div>
+      <div id="status" class="status">Tekan <b>Mulai Kamera</b> untuk mengaktifkan scanner.</div>
+
+      <div class="actions">
+        <button id="startBtn" type="button">Mulai Kamera</button>
+        <button id="closeBtn" type="button">Tutup Scanner</button>
+      </div>
+    </section>
+
+    <div class="hint">Scanner tidak menyimpan data peserta. Validasi dan check-in tetap dilakukan oleh sistem registrasi TGIF.</div>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const startBtn = document.getElementById('startBtn');
+    const closeBtn = document.getElementById('closeBtn');
+
+    let scanner = null;
+    let running = false;
+    let handled = false;
+
+    function setStatus(message, type = '') {
+      statusEl.className = 'status' + (type ? ' ' + type : '');
+      statusEl.innerHTML = message;
+    }
+
+    function extractToken(decodedText) {
+      const raw = String(decodedText || '').trim();
+      if (!raw) return '';
+
+      try {
+        const url = new URL(raw);
+        const token = url.searchParams.get('token');
+        if (token) return token.trim();
+      } catch (_) {
+        // Bukan URL: anggap isi QR adalah token langsung.
+      }
+
+      return raw;
+    }
+
+    async function stopScanner() {
+      if (!scanner || !running) return;
+      try {
+        await scanner.stop();
+      } catch (_) {}
+      running = false;
+      startBtn.disabled = false;
+    }
+
+    async function sendResult(decodedText) {
+      if (handled) return;
+      handled = true;
+
+      const token = extractToken(decodedText);
+
+      if (!token) {
+        handled = false;
+        setStatus('QR terbaca, tetapi token tidak ditemukan.', 'error');
+        return;
+      }
+
+      await stopScanner();
+      setStatus('QR berhasil dibaca. Mengirim ke aplikasi registrasi…', 'success');
+
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage({
+          type: 'TGIF_QR_SCANNED',
+          token: token,
+          raw: decodedText
+        }, '*');
+
+        setTimeout(() => {
+          try {
+            window.close();
+          } catch (_) {}
+        }, 600);
+        return;
+      }
+
+      setStatus(
+        'QR berhasil dibaca, tetapi halaman ini tidak dibuka dari aplikasi registrasi. Kembali ke aplikasi TGIF lalu tekan tombol Buka Scanner.',
+        'error'
+      );
+      handled = false;
+    }
+
+    async function startScanner() {
+      if (running) return;
+
+      handled = false;
+      startBtn.disabled = true;
+      setStatus('Meminta izin kamera…');
+
+      scanner = new Html5Qrcode('reader');
+
+      const config = {
+        fps: 12,
+        qrbox: (viewfinderWidth, viewfinderHeight) => {
+          const edge = Math.floor(Math.min(viewfinderWidth, viewfinderHeight) * 0.72);
+          return { width: edge, height: edge };
+        },
+        aspectRatio: 1.0,
+        disableFlip: false
+      };
+
+      try {
+        await scanner.start(
+          { facingMode: 'environment' },
+          config,
+          sendResult,
+          () => {}
+        );
+
+        running = true;
+        setStatus('Kamera aktif. Arahkan QR peserta ke dalam frame.');
+      } catch (error) {
+        startBtn.disabled = false;
+        running = false;
+        setStatus(
+          'Kamera tidak dapat dibuka. Pastikan izin kamera diberikan dan halaman dibuka melalui HTTPS.<br><br>' +
+          String(error && error.message ? error.message : error),
+          'error'
+        );
+      }
+    }
+
+    startBtn.addEventListener('click', startScanner);
+
+    closeBtn.addEventListener('click', async () => {
+      await stopScanner();
+      if (window.opener && !window.opener.closed) {
+        window.close();
+      } else {
+        setStatus('Scanner dihentikan. Kamu bisa menutup tab ini.');
+      }
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (scanner && running) {
+        scanner.stop().catch(() => {});
+      }
+    });
+  </script>
+</body>
+</html>
